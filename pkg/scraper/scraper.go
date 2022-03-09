@@ -16,7 +16,6 @@ package scraper
 
 import (
 	"context"
-	"math/rand"
 	"time"
 
 	"sigs.k8s.io/metrics-server/pkg/scraper/client"
@@ -125,22 +124,27 @@ func (c *scraper) Scrape(baseCtx context.Context) *storage.MetricsBatch {
 		delayMs = maxDelayMs
 	}
 
+	const maxConcurrency = 10
+	nodesCh := make(chan *corev1.Node, len(nodes))
 	for _, node := range nodes {
-		go func(node *corev1.Node) {
-			// Prevents network congestion.
-			sleepDuration := time.Duration(rand.Intn(delayMs)) * time.Millisecond
-			time.Sleep(sleepDuration)
-			// make the timeout a bit shorter to account for staggering, so we still preserve
-			// the overall timeout
-			ctx, cancelTimeout := context.WithTimeout(baseCtx, c.scrapeTimeout-sleepDuration)
+		nodesCh <- node
+	}
+	close(nodesCh)
+
+	for i := 0; i < maxConcurrency; i++ {
+		go func() {
+			ctx, cancelTimeout := context.WithTimeout(baseCtx, c.scrapeTimeout)
 			defer cancelTimeout()
-			klog.V(2).InfoS("Scraping node", "node", klog.KObj(node))
-			m, err := c.collectNode(ctx, node)
-			if err != nil {
-				klog.ErrorS(err, "Failed to scrape node", "node", klog.KObj(node))
+
+			for node := range nodesCh {
+				klog.V(2).InfoS("Scraping node", "node", klog.KObj(node))
+				m, err := c.collectNode(ctx, node)
+				if err != nil {
+					klog.ErrorS(err, "Failed to scrape node", "node", klog.KObj(node))
+				}
+				responseChannel <- m
 			}
-			responseChannel <- m
-		}(node)
+		}()
 	}
 
 	res := &storage.MetricsBatch{

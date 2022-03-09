@@ -16,6 +16,7 @@ package options
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -167,5 +168,9 @@ func (o Options) restConfig() (*rest.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 100
+	config.Transport = transport
+
 	return config, nil
 }
